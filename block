@@ -1,0 +1,55 @@
+sudo bash << 'EOF'
+set -e
+
+echo "==> 1. Creando estructura de directorios..."
+mkdir -p /opt/motioneye/conf
+mkdir -p /media/seguridad/videos
+mkdir -p /opt/scripts/seguridad
+
+echo "==> 2. Creando archivo docker-compose.yml..."
+cat <<'COMPOSE' > /opt/motioneye/docker-compose.yml
+version: '3'
+services:
+  motioneye:
+    image: ccrisan/motioneye:master-amd64
+    container_name: motioneye
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /opt/motioneye/conf:/etc/motioneye
+      - /media/seguridad/videos:/var/lib/motioneye
+    tmpfs:
+      - /tmp:exec,mode=777
+COMPOSE
+
+echo "==> 3. Creando script de limpieza y retención..."
+cat <<'SCRIPT' > /opt/scripts/seguridad/limpieza_rotativa.sh
+#!/bin/bash
+
+DIRECTORIO_VIDEOS="/media/seguridad/videos"
+
+# 1. Elimina archivos (.mp4, .jpg, .thumb) con más de 7 días de antigüedad
+find "$DIRECTORIO_VIDEOS" -type f \( -name "*.mp4" -o -name "*.jpg" -o -name "*.thumb" \) -mtime +7 -print -delete
+
+# 2. Elimina directorios vacíos (carpetas de fechas antiguas)
+find "$DIRECTORIO_VIDEOS" -type d -empty -delete
+SCRIPT
+
+chmod +x /opt/scripts/seguridad/limpieza_rotativa.sh
+
+echo "==> 4. Configurando tarea en Crontab (evitando duplicados)..."
+CRON_JOB="0 3 * * * /bin/bash /opt/scripts/seguridad/limpieza_rotativa.sh > /opt/scripts/seguridad/limpieza.log 2>&1"
+(crontab -l 2>/dev/null | grep -Fv "/opt/scripts/seguridad/limpieza_rotativa.sh" ; echo "$CRON_JOB") | crontab -
+
+echo "==> 5. Levantando contenedor MotionEye..."
+cd /opt/motioneye
+if command -v docker-compose &> /dev/null; then
+    docker-compose up -d
+else
+    docker compose up -d
+fi
+
+echo "==> Despliegue listo. Accede a: http://$(hostname -I | awk '{print $1}'):8765"
+EOF
